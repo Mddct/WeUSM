@@ -36,5 +36,6 @@
 - [ ] bestrq pretrain
 - [ ] unpiar data training (inject text)
 - [ ] text to speech representation
+- [ ] seperate learning scheduler for encoder and "decoder"
 
 使用工具：wenet toolkit， 会把相关paper定时整理到该README中

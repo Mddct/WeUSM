@@ -10,11 +10,12 @@ def _sampler(pdf: torch.Tensor, num_samples: int,
 
 
 def compute_mask_indices(
-    size: torch.Size,
-    mask_prob: float,
-    mask_length: int,
-    min_masks: int = 0,
-    device=torch.device('cpu')) -> torch.Tensor:
+        size: torch.Size,
+        mask_prob: float,
+        mask_length: int,
+        min_masks: int = 0,
+        device=torch.device('cpu'),
+) -> torch.Tensor:
 
     assert len(size) == 2
     batch_size, seq_length = size
@@ -33,7 +34,8 @@ def compute_mask_indices(
     mask_idxs = _sampler(pdf, num_masked_spans, device=device)
 
     mask_idxs = mask_idxs.unsqueeze(-1).repeat(1, 1, mask_length).view(
-        batch_size, num_masked_spans * mask_length)  # [B,1]
+        batch_size,
+        num_masked_spans * mask_length)  # [B,num_masked_spans*mask_length]
 
     offset = torch.arange(mask_length, device=device).view(1, 1, -1).repeat(
         1, num_masked_spans, 1)  # [1,num_masked_spans,mask_length]
