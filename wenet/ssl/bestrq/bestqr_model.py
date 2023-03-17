@@ -11,14 +11,15 @@ class BestRQModel(torch.nn.Module):
         self,
         encoder: torch.nn.Module,
         input_dim: int = 256,
-        embedding_dim: int = 256,
+        embedding_dim: int = 16,
         num_embeddings: int = 8192,
         num_codebooks: int = 1,
         dropout_rate: float = 0.1,
         mask_prob: float = 0.01,
         mask_length: int = 10,
         min_masks: int = 2,
-        layer_norm_epsilon=1e-5,
+        norm: str = "batch_norm",
+        norm_epsilon=1e-5,
     ) -> None:
         super().__init__()
 
@@ -48,8 +49,14 @@ class BestRQModel(torch.nn.Module):
         mask_emb_weight.requires_grad = True
         self.mask_emb = torch.nn.init.normal_(mask_emb_weight, mean=0, std=0.1)
 
-        self.input_layer_norm = torch.nn.LayerNorm(input_dim,
-                                                   layer_norm_epsilon)
+        assert norm in ['batch_norm', 'layer_norm']
+        if norm == "batch_norm":
+            self.use_layer_norm = False
+            self.norm = torch.nn.BatchNorm1d(input_dim, norm_epsilon)
+        else:
+            self.use_layer_norm = True
+            self.norm = torch.nn.LayerNorm(input_dim, norm_epsilon)
+
         self.encoder = encoder
         self.encoder_top_n_out = torch.nn.parameter.Parameter(
             torch.Tensor(num_codebooks, self.encoder.output_size(),
@@ -79,7 +86,7 @@ class BestRQModel(torch.nn.Module):
         # 4 get logits
         out = out.unsqueeze(1)  # [B, 1, T', dim]
         top_n_out = self.encoder_top_n_out.unsqueeze(
-            0)  # [num_codebooks, dim, num_embeddings]
+            0)  # [1, num_codebooks, dim, num_embeddings]
         out = torch.matmul(out,
                            top_n_out)  # [B, num_codebooks, T', num_embeddings]
 
@@ -111,7 +118,11 @@ class BestRQModel(torch.nn.Module):
         return xs, masks
 
     def _nearest_embedding_idx(self, xs: torch.Tensor) -> torch.Tensor:
-        xs = self.input_layer_norm(xs)
+        if not self.use_layer_norm:
+            xs = xs.transpose(1, 2)
+        xs = self.norm(xs)
+        if not self.use_layer_norm:
+            xs = xs.transpose(1, 2)
         xs = self.input_dropout(xs)
         xs = torch.matmul(xs, self.projection.to(xs.device))
 
