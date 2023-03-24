@@ -12,15 +12,16 @@ class BestRQModel(torch.nn.Module):
         encoder: torch.nn.Module,
         num_mel_bins: int = 80,
         input_dim: int = 256,
+        norm_input: bool = True,
         embedding_dim: int = 16,
         num_embeddings: int = 8192,
         num_codebooks: int = 1,
         mask_prob: float = 0.01,
         mask_length: int = 10,
         min_masks: int = 2,
-        norm: str = "batch_norm",
         norm_epsilon: float = 1e-5,
         mask_signal: bool = False,
+        dropout_rate: float = 0.1,
     ) -> None:
         super().__init__()
 
@@ -30,15 +31,18 @@ class BestRQModel(torch.nn.Module):
         # NOTE: should filter audio less than mask_length
         self.mask_length = mask_length
         self.min_masks = min_masks
+
+        self.num_codebooks = num_codebooks
         # encoder
         self.encoder = encoder
         self.encoder_top_n_out = torch.nn.parameter.Parameter(
-            torch.Tensor(num_codebooks, self.encoder.output_size(),
+            torch.Tensor(self.num_codebooks, self.encoder.output_size(),
                          num_embeddings))
         # mask embedding
         mask_embedding_dim = num_mel_bins if mask_signal else input_dim
         self.mask_emb = torch.nn.parameter.Parameter(
-            torch.Tensor(mask_embedding_dim).normal_(mean=0, std=0.1))
+            torch.Tensor(mask_embedding_dim), requires_grad=True)
+        torch.nn.init.trunc_normal_(self.mask_emb, mean=0.0, std=0.1)
 
         # stack feature or not
         self.mask_signal = mask_signal
@@ -46,29 +50,26 @@ class BestRQModel(torch.nn.Module):
             self.stack_frames = self.encoder.embed.subsampling_rate
             input_dim = num_mel_bins * self.stack_frames
 
-        # norm input
-        assert norm in ['batch_norm', 'layer_norm']
-        if norm == "batch_norm":
-            self.use_layer_norm = False
-            self.norm = torch.nn.BatchNorm1d(input_dim, norm_epsilon)
-        else:
-            self.use_layer_norm = True
-            self.norm = torch.nn.LayerNorm(input_dim, norm_epsilon)
+        # norm input and dropout
+        self.norm_input = norm_input
+        self.epsilon = norm_epsilon
+        # NOTE(Mddct): dropout for input is very import for pretraining
+        self.dropout_unmask = torch.nn.Dropout(dropout_rate)
 
         # random projectoin
-        random_projection_weight = torch.empty(input_dim,
-                                               embedding_dim,
-                                               requires_grad=False)
-        self.projection = torch.nn.init.xavier_normal_(
-            random_projection_weight)
+        self.projection = torch.nn.parameter.Parameter(
+            torch.Tensor(input_dim, embedding_dim),
+            requires_grad=False,
+        )
+        torch.nn.init.xavier_uniform_(self.projection)
 
         # codebooks
         # [num_codebooks, embedding_dim, num_embeddings]
-        random_embedding_weight = torch.empty(num_codebooks,
-                                              embedding_dim,
-                                              num_embeddings,
-                                              requires_grad=False)
-        self.embeddings = torch.nn.init.normal_(random_embedding_weight)
+        self.embeddings = torch.nn.parameter.Parameter(
+            torch.Tensor(self.num_codebooks, embedding_dim, num_embeddings),
+            requires_grad=False,
+        )
+        torch.nn.init.normal_(self.embeddings)
 
     def forward(
         self,
@@ -81,7 +82,6 @@ class BestRQModel(torch.nn.Module):
         # should support nonstreamming and streamming
         # TODO(Mddct): streamming future
         # eg: full attenton and chunk or  dynamic chunk training
-
         # 0 mask signal or not
         if self.mask_signal:
             xs, masked_masks = self._apply_mask_signal(xs)
@@ -118,9 +118,21 @@ class BestRQModel(torch.nn.Module):
                            top_n_out)  # [B, num_codebooks, T', num_embeddings]
 
         # 5 compute loss
-        loss = self._compute_loss(out, target_ids,
-                                  out_mask.squeeze(1) * masked_masks)
-        return {"loss": loss}
+        masks = out_mask.squeeze(1) * masked_masks
+        loss = self._compute_loss(out, target_ids, mask=masks)
+        # 6 other info: num codes used in batch, unique num codes used in batch
+        num_codes = masks.sum() * self.num_codebooks
+        uniq_num_codes = torch.tensor(
+            torch.unique(target_ids * masks.unsqueeze(2)).numel()).detach()
+        ids_corr = out.argmax(dim=-1, keepdim=False).transpose(1,
+                                                               2) == target_ids
+        codes_acc = (ids_corr * masks.unsqueeze(2)).sum() / num_codes
+        return {
+            "codes_acc": codes_acc,
+            "loss": loss,
+            "num_codes": num_codes,
+            "uniq_num_codes": uniq_num_codes
+        }
 
     def _apply_mask_signal(
             self, input: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -179,12 +191,24 @@ class BestRQModel(torch.nn.Module):
         # for cross attention with decoder later
         return xs, masks
 
+    def _norm_input(self, input: torch.Tensor) -> torch.Tensor:
+        if not self.norm_input:
+            return input
+        # layer norm but no scale learnable
+        mean = torch.mean(input, dim=-1, keepdim=True)
+        var = torch.mean(torch.square(input - mean), keepdim=True, dim=-1)
+        normed_input = (input - mean) * torch.rsqrt(var + self.epsilon)
+        return normed_input
+
     def _nearest_embedding_idx(self, xs: torch.Tensor) -> torch.Tensor:
-        if not self.use_layer_norm:
-            xs = xs.transpose(1, 2)
-        xs = self.norm(xs)
-        if not self.use_layer_norm:
-            xs = xs.transpose(1, 2)
+        # if not self.use_layer_norm:
+        #     xs = xs.transpose(1, 2)
+        # xs = self.norm(xs)
+        # if not self.use_layer_norm:
+        #     xs = xs.transpose(1, 2)
+        # norm input
+        xs = self._norm_input(xs)
+        xs = self.dropout_unmask(xs)
         xs = torch.matmul(xs, self.projection.to(xs.device))
 
         B, T, C = xs.size()
