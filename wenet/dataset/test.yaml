@@ -1,0 +1,123 @@
+# network architecture
+# encoder related
+training_type: ssl
+ssl_conf: 
+    input_dim: 512
+    embedding_dim: 16
+    num_embeddings: 8192
+    mask_prob: 0.01
+    mask_length: 10
+    num_codebooks: 3
+    mask_signal: true
+    # norm: layer_norm
+    min_masks: 10
+
+encoder: conformer
+encoder_conf:
+    output_size: 512    # dimension of attention
+    attention_heads: 8
+    linear_units: 2048  # the number of units of position-wise feed forward
+    num_blocks: 16      # the number of encoder blocks
+    dropout_rate: 0.1
+    positional_dropout_rate: 0.1
+    attention_dropout_rate: 0.1
+    input_layer: conv2d # encoder input type, you can chose conv2d, conv2d6 and conv2d8
+    normalize_before: true
+    cnn_module_kernel: 15
+    use_cnn_module: True
+    cnn_module_norm: 'layer_norm'
+    activation_type: 'swish'
+    pos_enc_layer_type: 'rel_pos'
+    selfattention_layer_type: 'rel_selfattn'
+
+
+# decoder: bitransformer
+decoder: transformer
+decoder_conf:
+  attention_heads: 4
+  dropout_rate: 0.1
+  linear_units: 2048
+  num_blocks: 4
+  positional_dropout_rate: 0.1
+  self_attention_dropout_rate: 0.1
+  src_attention_dropout_rate: 0.1
+
+# hybrid transducer+ctc+attention
+model_conf:
+    ctc_weight: 0.3
+    attention_weight: 0.7
+    lsm_weight: 0.1     # label smoothing option
+    length_normalized_loss: false
+    # reverse_weight: 0.3
+    quantity_weight: 1.0
+    # cif_weight : 1.0
+    cif_acoustic_reg: true
+    predictor_lm: true
+    predictor_lm_tie_weight: false
+    predictor_lm_weight: 1.0
+    cif_eos: false
+    predictor_regularisation: true
+
+    predictor_m1:  400000
+    predictor_m2: 2000000
+
+cif_conf:
+    threshold: 1.0
+    smooth_factor: 1.0
+    noise_threshold: 0.0
+    tail_threshold: 0.5
+    funnel: true
+    funnel_skip: true
+    addition_encoder: true
+    addition_encoder_big: true # refactor
+
+alpha: conv
+alpha_conf:
+    dropout: 0.1
+
+dataset_conf:
+    filter_conf:
+        max_length: 3000
+        min_length: 80
+        token_max_length: 100
+        token_min_length: 1
+    resample_conf:
+        resample_rate: 16000
+    speed_perturb: true
+    fbank_conf:
+        num_mel_bins: 80
+        frame_shift: 10
+        frame_length: 25
+        dither: 0.1
+    spec_aug: true
+    spec_aug_conf:
+        num_t_mask: 2
+        num_f_mask: 2
+        max_t: 50
+        max_f: 10
+    shuffle: true
+    shuffle_conf:
+        in_shuffle_size: 1000
+        list_shuffle_size: 100
+    sort: true
+    sort_conf:
+        sort_size: 500  # sort_size should be less than shuffle_size
+    bucket_conf:
+      batch_size: 3
+      bucket: [10, 40, 80, 100]
+    # batch_conf:
+    #     batch_type: 'dynamic'
+    #     max_frames_in_batch: 25000
+
+grad_clip: 4
+accum_grad: 1
+max_epoch: 600
+log_interval: 100
+
+optim: adam
+optim_conf:
+    lr: 0.001
+scheduler: warmuplr     # pytorch v1.1.0+ required
+scheduler_conf:
+    warmup_steps: 25000
+

@@ -51,6 +51,7 @@ class BestRQModel(torch.nn.Module):
             input_dim = num_mel_bins * self.stack_frames
 
         # norm input and dropout
+        self.input_ln = torch.nn.LayerNorm(num_mel_bins, eps=norm_epsilon)
         self.norm_input = norm_input
         self.epsilon = norm_epsilon
         # NOTE(Mddct): dropout for input is very import for pretraining
@@ -83,6 +84,8 @@ class BestRQModel(torch.nn.Module):
         # TODO(Mddct): streamming future
         # eg: full attenton and chunk or  dynamic chunk training
         # 0 mask signal or not
+        # NOTE(Mddct): test no cmvn only layer norm
+        xs = self.input_ln(xs)
         if self.mask_signal:
             xs, masked_masks = self._apply_mask_signal(xs)
         else:
@@ -207,7 +210,7 @@ class BestRQModel(torch.nn.Module):
         # if not self.use_layer_norm:
         #     xs = xs.transpose(1, 2)
         # norm input
-        xs = self._norm_input(xs)
+        # xs = self._norm_input(xs)
         xs = self.dropout_unmask(xs)
         xs = torch.matmul(xs, self.projection.to(xs.device))
 
